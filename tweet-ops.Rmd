@@ -1,0 +1,184 @@
+### Webscraping
+
+
+# Overview
+
+
+## As one big pipe
+
+```{r, eval = FALSE}
+twitter_users <- read_html(SOURCE_URL) %>%
+    html_nodes(xpath = EMBASSY_XPATH_SELECTOR ) %>%
+    html_text() %>%
+    str_extract('[[:alnum:]_]+$') %>%
+    split(., ceiling(seq(length(.)) / BATCH_SIZE)) %>%
+    lapply(function(x){lookupUsers(users = x)}) %>%
+    unlist() %>%
+    lapply(as.data.frame) %>%
+    bind_rows()
+```
+
+
+
+
+# Steps
+
+
+The libraries:
+
+```{r, message = F, warning = F}
+# TK dev tools
+library(dplyr)
+library(ggplot2)
+library(rvest)
+library(stringr)
+library(jsonlite)
+library(twitteR)
+```
+
+The constants:
+
+```{r}
+BATCH_SIZE = 100
+CREDS_FILE = '~/.creds/me.json'
+# https://archive.is/2CobF
+SOURCE_URL = 'http://www.state.gov/r/pa/ode/socialmedia/'
+```
+
+
+
+## Set up twitter
+
+via the [twitteR package](https://cran.r-project.org/web/packages/twitteR/twitteR.pdf)
+
+```{r, message = F, warning = F}
+mycreds <- fromJSON(txt = CREDS_FILE)
+setup_twitter_oauth(consumer_key = mycreds$consumer_key,
+                         consumer_secret = mycreds$consumer_secret,
+                         access_token = mycreds$access_token,
+                         access_secret = mycreds$access_token_secret)
+```
+
+
+
+
+
+## Download and parse the homepage
+
+This is not a common web-scraping scenario -- except for when you're trying to scrape from rarely-scraped sources, in which case, there's probably a reason those sources are rarely scraped.
+
+### Explanation of the xpath
+
+```{r}
+EMBASSY_XPATH_SELECTOR = paste(
+  "/",
+  "a[@name='tw']",
+  "ancestor::td[@colspan=2]",
+  "..",
+  "following-sibling::tr[1]",
+  "td[position() = 1 or position() = 2]",
+  "a[not(contains(.,'Mission') or contains(.,'Ambassador'))]",
+  "@href",
+  sep = '/'
+)
+```
+
+
+### Extracting the links
+
+```{r}
+screen_names <-
+  read_html(SOURCE_URL) %>%
+    html_nodes(xpath = EMBASSY_XPATH_SELECTOR) %>%
+    html_text() %>%
+    str_extract('[[:alnum:]_]+$')
+```
+
+
+
+---------------
+
+
+## Calling Twitter
+
+
+### Subsetting the list
+
+```{r}
+screen_name_lists <- screen_names %>%
+    split(., ceiling(seq(length(.)) / BATCH_SIZE))
+```
+
+
+### Calling Twitter
+
+```{r}
+twitter_response <- screen_name_lists %>%
+    lapply(function(x){lookupUsers(users = x)})
+```
+
+
+## Creating a data frame
+
+```{r}
+twitter_users  <- twitter_response %>%
+    unlist() %>%
+    lapply(as.data.frame) %>%
+    bind_rows()
+```
+
+## Geocoding
+
+```{r}
+twitter_users %<>%
+          filter() %>%
+          mutate(location_name = ifelse(
+                     grepl("embassy", name, ignore.case = T),
+                     name, screenName)) %>%
+          mutate(location_name = str_replace(location_name,
+                                    regex('U\\.?S\\.?A?Emb(?:assy)?',
+                                          ignore_case = TRUE),
+                                    'U.S. Embassy ')) %>%
+          mutate(location_name = ifelse(grepl("Embassy", location_name) |
+                                          location == "",
+                                        location_name, location))
+
+```
+
+### mutate_geocode
+
+```{r}
+geocoded_twitter_users <- as.data.frame(twitter_users) %>%
+  mutate_geocode(location = location_name, source = "google")
+```
+
+Warning messages:
+
+```
+1: geocode failed with status ZERO_RESULTS, location = "USINTHavana"
+2: geocode failed with status ZERO_RESULTS, location = "US Embassy NZ"
+```
+
+
+### Make a map
+
+```{r}
+googmap <- get_googlemap(zoom = 1, size = c(500, 300))
+ggmap(googmap)
+```
+
+
+
+## Visualizing
+
+
+### Scatter plot
+
+```{r}
+ggplot(twitter_users, aes(x = followersCount, y = statusesCount)) +
+  geom_point()
+
+```
+
+
+
